@@ -1,9 +1,10 @@
 (ns fruitprocessing.operation
-  "OperationActor -- one meat-processing operation = one supervised actor run,
-  expressed as a langgraph-clj StateGraph. The advisor (MeatProcessingAdvisor)
-  is sealed into a single node (:advise); its proposal is ALWAYS routed
-  through the Meat Processing Governor (:govern) and the rollout phase gate
-  (:decide) before anything commits to the SSoT.
+  "OperationActor -- one fruit & vegetable processing operation = one
+  supervised actor run, expressed as a langgraph-clj StateGraph. The
+  advisor (FruitVegetableOpsAdvisor) is sealed into a single node
+  (:advise); its proposal is ALWAYS routed through the Fruit & Vegetable
+  Processing Governor (:govern) and the rollout phase gate (:decide)
+  before anything commits to the SSoT.
 
   Everything the actor depends on is injected, so each is a swap, not a
   rewrite:
@@ -11,11 +12,11 @@
     - the Advisor  (mock | real LLM)
     - the Phase    (0->3 rollout)
 
-  One graph run = one meat-processing operation (intake -> advise -> govern ->
-  decide -> commit | hold | approval). No unbounded inner loop -- each
-  operation is auditable and checkpointed. A batch's life is advanced by
-  MANY operations (flag-concern / log-batch / shipment), each its own
-  independent run.
+  One graph run = one fruit & vegetable processing operation (intake ->
+  advise -> govern -> decide -> commit | hold | approval). No unbounded
+  inner loop -- each operation is auditable and checkpointed. A batch's
+  life is advanced by MANY operations (flag-concern / log-batch /
+  shipment), each its own independent run.
 
   Human-in-the-loop = real approval workflow:
   `interrupt-before #{:request-approval}` pauses the actor and hands the
@@ -28,8 +29,7 @@
   high-level flow; production build requires langgraph-clj."
   (:require [fruitprocessing.advisor :as advisor]
             [fruitprocessing.governor :as governor]
-            [fruitprocessing.phase :as phase]
-            [fruitprocessing.store :as store]))
+            [fruitprocessing.phase :as phase]))
 
 (defn- commit-fact [request context proposal]
   {:t          :committed
@@ -47,8 +47,9 @@
    :payload (:value proposal)})
 
 (defn run-operation
-  "Run one meat-processing operation through the advisor -> governor -> phase
-  gate -> decision flow. Returns a map with :disposition, :audit, :record.
+  "Run one fruit & vegetable processing operation through the advisor ->
+  governor -> phase gate -> decision flow. Returns a map with
+  :disposition, :audit, :record.
 
   This is the core synchronous flow that will be embedded in the langgraph
   StateGraph in production. For testing/development, can be called directly."

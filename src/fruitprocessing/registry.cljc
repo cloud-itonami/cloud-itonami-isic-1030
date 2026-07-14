@@ -2,8 +2,7 @@
   "Pure validation functions for fruit & vegetable processing parameters. These
   are called by the Governor to independently verify physical/operational
   constraints -- the LLM advisor's confidence is NOT sufficient to override
-  these checks."
-  (:require [fruitprocessing.facts :as facts]))
+  these checks.")
 
 (defn batch-temp-out-of-range?
   "Independently verify that the batch's actual temperature stays inside
@@ -25,7 +24,7 @@
 (defn sanitation-score-insufficient?
   "Independently verify that the plant's pre-processing sanitation score
   meets the minimum required by jurisdiction. Score is 0-100, assessed by
-  a third-party auditor against FSIS/EFSA/MHLW sanitation standards within
+  a third-party auditor against FDA/EFSA/MHLW sanitation standards within
   7 days prior to batch processing."
   [actual-score min-score-required]
   (< actual-score min-score-required))

@@ -1,9 +1,9 @@
 (ns fruitprocessing.advisor
-  "MeatProcessingAdvisor -- the contained LLM/decision node. This actor's
+  "FruitVegetableOpsAdvisor -- the contained LLM/decision node. This actor's
   intelligence layer proposes batch operations based on plant state and
-  incoming meat lots. The advisor is SEALED into the `:advise` node of
-  the operation graph; every proposal is routed through the independent
-  Governor before committing.
+  incoming fruit/vegetable lots. The advisor is SEALED into the `:advise`
+  node of the operation graph; every proposal is routed through the
+  independent Governor before committing.
 
   The advisor makes proposals but has NO direct authority. Proposals are
   always censored by:
@@ -12,15 +12,15 @@
     3. Human operator (for high-stakes actions)
 
   Current implementation is a mock advisor for testing. Production should
-  use langchain/Claude or similar LLM backend (same seam point as
-  `refining.refiningadvisor`)."
-  (:require [fruitprocessing.facts :as facts]))
+  use langchain/Claude or similar LLM backend (same seam point as sibling
+  food-manufacturing coordination actors in the cloud-itonami actor
+  family).")
 
 ;; Protocol for swappable advisor implementations
 (defprotocol Advisor
   (-advise [advisor store request]
     "Given store and request, return a proposal map with
-    :op, :stake, :value, :cites, :summary, :confidence"))
+    :op, :stake, :effect, :value, :cites, :summary, :confidence"))
 
 ;; Mock advisor for testing
 (defrecord MockAdvisor []
@@ -31,47 +31,52 @@
         :log-production-batch
         {:op :log-production-batch
          :stake :log-production-batch
+         :effect :propose
          :value {:jurisdiction "US"
                  :batch-id subject
                  :action "Log batch into production records"}
-         :cites ["FSIS-Directive-8000.200"]
-         :summary "Batch intake and evidence checklist verified; ready for production logging"
+         :cites ["FDA-Food-Safety-Modernization-Act"]
+         :summary "Harvest-lot provenance verified; sanitation and residue screening clear; ready for production logging"
          :confidence 0.85}
 
         :coordinate-shipment
         {:op :coordinate-shipment
          :stake :coordinate-shipment
+         :effect :propose
          :value {:batch-id subject
-                 :destination "Customer warehouse"
+                 :destination "Distribution center"
                  :transport-mode "refrigerated-truck"}
-         :cites ["FSIS-Food-Safety-Modernization-Act"]
-         :summary "Final product ready for shipment; cold-chain maintained throughout"
+         :cites ["FDA-Sanitary-Transportation-Rule"]
+         :summary "Finished product ready for shipment; storage temperature maintained throughout"
          :confidence 0.80}
 
         :flag-food-safety-concern
         {:op :flag-food-safety-concern
          :stake :monitoring
+         :effect :propose
          :value {:batch-id subject
-                 :concern-type "temperature-excursion"
-                 :description "Temperature logger showed > 5C for 30 minutes during transport"
-                 :recommended-action "hold-for-sensory-evaluation"}
-         :cites ["FSIS-Critical-Control-Points"]
-         :summary "Detected potential temperature excursion; escalating for sensory eval"
+                 :concern-type "low-acid-canning-process-deviation"
+                 :description "Retort scheduled-process record shows a temperature/time deviation from the filed process for this low-acid canned product -- botulism (C. botulinum) risk cannot be ruled out without process-authority review"
+                 :recommended-action "hold-for-process-authority-review"}
+         :cites ["FDA-21-CFR-113-Scheduled-Process"]
+         :summary "Possible scheduled-process deviation on a low-acid canning batch; escalating for mandatory process-authority review -- this actor has no certification authority"
          :confidence 0.65}
 
         :schedule-maintenance
         {:op :schedule-maintenance
          :stake :operational
-         :value {:equipment-id "MD-001"
+         :effect :propose
+         :value {:equipment-id "MD-002"
                  :maintenance-type "metal-detector-calibration"
-                 :proposed-date "2026-07-15"}
-         :cites ["Equipment-Manual-MD-2024"]
+                 :proposed-date "2026-07-22"}
+         :cites ["Equipment-Manual-Metal-Detector-2024"]
          :summary "Metal detector due for scheduled calibration"
          :confidence 0.90}
 
         ;; fallback
         {:op op
          :stake :unknown
+         :effect :propose
          :value {}
          :cites []
          :summary "Operation not recognized"

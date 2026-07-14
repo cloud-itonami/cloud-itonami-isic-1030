@@ -1,53 +1,57 @@
 (ns fruitprocessing.facts
-  "Reference facts for meat processing: jurisdiction requirements for batch
-  processing, cold-chain integrity, holding-time compliance, and food-safety
-  evidence. This namespace contains pure lookup functions for regulatory
-  compliance checks -- the Governor calls these to validate proposals against
-  jurisdiction requirements."
-  (:require [clojure.string :as str]))
+  "Reference facts for fruit & vegetable processing: jurisdiction storage-time
+  limits and evidence-checklist requirements, and finished-product
+  post-processing storage-temperature windows by product category (canned /
+  frozen / dried). This namespace contains pure lookup functions for
+  regulatory/food-safety compliance checks -- the Governor calls these to
+  independently validate proposals against jurisdiction/product
+  requirements; the advisor's confidence is NOT sufficient to override
+  these checks."
+  (:require [clojure.set :as set]))
 
 (def jurisdictions
-  "Meat processing jurisdictions and their required documentation/evidence
-  checklist requirements."
+  "Fruit & vegetable processing jurisdictions and their maximum
+  post-processing storage time (days) and required documentation/evidence
+  checklist. The EU entry additionally requires a scheduled-process record
+  for low-acid canned products (21 CFR 113-equivalent botulism-risk
+  control) because EFSA mandates it for imports as well as domestic
+  production."
   {"US"
    {:id "US"
-    :name "United States (FSIS/USDA)"
-    :cold-chain-max-temp-c 4.0
-    :holding-time-max-hours 24
+    :name "United States (FDA/FSMA)"
+    :storage-time-max-days 7
     :required-evidence
-    [:batch-assay           ;; source animal health/age/provenance
-     :temperature-log       ;; cold-chain temperature records
-     :holding-time-record   ;; time from receive to processing start
-     :sanitation-log        ;; pre-processing plant sanitation
-     :metal-detector-pass   ;; foreign material screening
-     :food-contact-surface-swab]} ;; hygiene verification
+    [:harvest-lot-record      ;; grower/lot provenance & harvest date
+     :temperature-log         ;; post-processing storage temperature records
+     :storage-time-record     ;; time from processing-complete to shipment
+     :sanitation-log          ;; pre-processing plant sanitation
+     :residue-screening-pass  ;; pesticide/herbicide MRL screening result
+     :traceability-record]}   ;; harvest-to-shipment chain of custody
 
    "JP"
    {:id "JP"
-    :name "日本 (MHLW/厚生労働省)"
-    :cold-chain-max-temp-c 5.0
-    :holding-time-max-hours 24
+    :name "日本 (厚生労働省・食品衛生法)"
+    :storage-time-max-days 5
     :required-evidence
-    [:batch-assay
+    [:harvest-lot-record
      :temperature-log
-     :holding-time-record
+     :storage-time-record
      :sanitation-log
-     :metal-detector-pass
-     :food-contact-surface-swab]}
+     :residue-screening-pass
+     :traceability-record]}
 
    "EU"
    {:id "EU"
     :name "European Union (EFSA)"
-    :cold-chain-max-temp-c 3.0
-    :holding-time-max-hours 24
+    :storage-time-max-days 5
     :required-evidence
-    [:batch-assay
+    [:harvest-lot-record
      :temperature-log
-     :holding-time-record
+     :storage-time-record
      :sanitation-log
-     :metal-detector-pass
-     :food-contact-surface-swab
-     :allergen-test]}})
+     :residue-screening-pass
+     :traceability-record
+     :low-acid-canning-process-record]}})
 
 (defn jurisdiction-by-id [id]
   (get jurisdictions id))
@@ -62,37 +66,45 @@
       false
       (let [required (set (:required-evidence j))
             present (set checklist)]
-        (clojure.set/subset? required present)))))
+        (set/subset? required present)))))
 
 (def product-types
-  "Valid meat product categories and their required processing parameters."
-  {"fresh-beef"
-   {:id "fresh-beef"
-    :name "生牛肉"
-    :cold-chain-temp-min-c -1.0
-    :cold-chain-temp-max-c 4.0
-    :holding-time-max-hours 24}
+  "Valid finished fruit & vegetable product categories (canned / frozen /
+  dried) and their post-processing storage-temperature windows. This actor
+  never operates or schedules the retort/blanch/freeze/dry process itself
+  (that authority belongs exclusively to licensed, process-authority-
+  certified plant operators -- see the Governor's `op-not-allowed`/hard
+  block on processing-line control); these windows govern only a FINISHED
+  batch's storage/holding temperature after processing is complete."
+  {"canned-tomato"
+   {:id "canned-tomato"
+    :name "トマト缶詰"
+    :cold-chain-temp-min-c 0.0
+    :cold-chain-temp-max-c 35.0}
 
-   "fresh-pork"
-   {:id "fresh-pork"
-    :name "生豚肉"
-    :cold-chain-temp-min-c -1.0
-    :cold-chain-temp-max-c 4.0
-    :holding-time-max-hours 24}
+   "canned-green-beans"
+   {:id "canned-green-beans"
+    :name "グリーンビーンズ缶詰"
+    :cold-chain-temp-min-c 0.0
+    :cold-chain-temp-max-c 35.0}
 
-   "fresh-poultry"
-   {:id "fresh-poultry"
-    :name "生家禽"
-    :cold-chain-temp-min-c -1.0
-    :cold-chain-temp-max-c 2.0
-    :holding-time-max-hours 12}
+   "frozen-peas"
+   {:id "frozen-peas"
+    :name "冷凍グリーンピース"
+    :cold-chain-temp-min-c -22.0
+    :cold-chain-temp-max-c -18.0}
 
-   "processed-sausage"
-   {:id "processed-sausage"
-    :name "ソーセージ"
-    :cold-chain-temp-min-c 2.0
-    :cold-chain-temp-max-c 5.0
-    :holding-time-max-hours 48}})
+   "frozen-corn"
+   {:id "frozen-corn"
+    :name "冷凍コーン"
+    :cold-chain-temp-min-c -22.0
+    :cold-chain-temp-max-c -18.0}
+
+   "dried-apricot"
+   {:id "dried-apricot"
+    :name "ドライアプリコット"
+    :cold-chain-temp-min-c 5.0
+    :cold-chain-temp-max-c 25.0}})
 
 (defn product-type-by-id [id]
   (get product-types id))

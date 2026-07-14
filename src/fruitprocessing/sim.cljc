@@ -1,53 +1,56 @@
 (ns fruitprocessing.sim
-  "Simple simulation/demo runner for the MeatProcessingActor. Used to validate
-  that the actor graph compiles and basic proposal flow works."
-  (:require [fruitprocessing.operation :as operation]
-            [fruitprocessing.store :as store]
-            [fruitprocessing.phase :as phase]))
+  "Simple simulation/demo driver for the fruit & vegetable processing actor.
+  Exercises the basic flow: intake -> log batch -> coordinate shipment.
 
-(defn demo
-  "Run a simple demo scenario: create a batch, propose logging it, and check
-  the verdict flow."
-  []
-  (let [;; Create store with a test batch
-        st (store/mem-store
+  For CLI: clojure -M:dev:run"
+  (:require [fruitprocessing.store :as store]
+            [fruitprocessing.operation :as operation]))
+
+(defn -main [& _args]
+  (println "Fruit & Vegetable Processing Actor Simulation")
+  (println "==============================================")
+
+  ;; Set up an initial batch in the store
+  (let [st (store/mem-store
             {:initial-batches
-             {"batch-001"
-              {:id "batch-001"
+             {"batch-1030-001"
+              {:id "batch-1030-001"
                :jurisdiction "US"
-               :product-type "fresh-beef"
-               :batch-temp-c 3.5
-               :holding-time-hours 18
-               :sanitation-score 85
-               :metal-detector {:passed? true :threshold-mm 2.0}
-               :contamination-flag-raised? false
-               :contamination-flag-resolved? true
-               :evidence-checklist [:batch-assay :temperature-log :holding-time-record
-                                    :sanitation-log :metal-detector-pass
-                                    :food-contact-surface-swab]
+               :product-type "frozen-peas"
+               :received-at "2026-07-14T08:00:00Z"
+               :batch-temp-c -20.0
+               :storage-time-days 3
+               :harvest-lot-verified? true
+               :sanitation-score 88
+               :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+               :spoilage-flag-raised? false
+               :spoilage-flag-resolved? true
+               :evidence-checklist [:harvest-lot-record :temperature-log
+                                    :storage-time-record :sanitation-log
+                                    :residue-screening-pass :traceability-record]
                :processed? false}}})
+        actor-context {:actor-id "fruit-vegetable-processor-01" :phase :phase-1}]
 
-        ;; Build actor
-        actor (operation/build st)
+    ;; Simulate logging a production batch
+    (println "\n1. Logging production batch: batch-1030-001")
+    (let [request {:op :log-production-batch
+                   :subject "batch-1030-001"
+                   :stake :log-production-batch}
+          result (operation/run-operation st request actor-context)]
+      (println "   Disposition:" (:disposition result))
+      (println "   Audit trail:" (:audit result))
+      (when-let [rec (:record result)]
+        (println "   Record:" rec)))
 
-        ;; Create a request to log the batch
-        request {:op :log-production-batch
-                 :subject "batch-001"
-                 :stake :log-production-batch}
+    ;; Simulate coordinating shipment (only if prior logged successfully)
+    (println "\n2. Coordinating shipment: batch-1030-001")
+    (let [request {:op :coordinate-shipment
+                   :subject "batch-1030-001"
+                   :stake :coordinate-shipment}
+          result (operation/run-operation st request actor-context)]
+      (println "   Disposition:" (:disposition result))
+      (println "   Audit trail:" (:audit result))
+      (when-let [rec (:record result)]
+        (println "   Record:" rec)))
 
-        ;; Context with phase 0 (simulation)
-        context {:actor-id "meat-processor-01"
-                 :role :plant-manager
-                 :phase :phase-0}]
-
-    (println "=== Meat Processing Actor Demo ===")
-    (println "Demo batch: batch-001")
-    (println "Request: log-production-batch")
-    (println "Phase: phase-0 (simulation)")
-    (println "Expected: escalate (phase-0 blocks production ops)")
-    (println)))
-
-(comment
-  ;; In a real REPL:
-  (demo)
-)
+    (println "\nSimulation complete")))

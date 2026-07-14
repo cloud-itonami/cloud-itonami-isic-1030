@@ -1,30 +1,36 @@
 (ns fruitprocessing.store
-  "Store abstraction for meat processing batches. Current implementation is
-  an in-memory map; production should migrate to Datomic/kotoba-server (the
-  same seam point all cloud-itonami actors use).
+  "Store abstraction for fruit & vegetable processing batches. Current
+  implementation is an in-memory map; production should migrate to
+  Datomic/kotoba-server (the same seam point all cloud-itonami actors use).
 
-  A processing batch is the minimal unit of work: one delivery of meat from
-  a supplier, tracked through intake, sanitation verification, processing
-  operations, and shipment. Each batch has:
-    - :id unique batch identifier (UUID / SKU)
+  A processing batch is the minimal unit of work: one delivery of fresh
+  produce from a grower/supplier, tracked through intake, sanitation
+  verification, processing (canning/freezing/drying) into a finished
+  product, and shipment. Each batch has:
+    - :id unique batch identifier (UUID / lot code)
     - :jurisdiction country code (US/JP/EU/etc)
-    - :product-type what was delivered (fresh-beef / fresh-pork / fresh-poultry / processed-sausage)
-    - :received-at timestamp when batch arrived
-    - :batch-temp-c actual measured temperature at receive
-    - :batch-assay true once batch source animal(s) cleared
-    - :holding-time-hours cumulative time at > 5C
+    - :product-type finished-product id (see `fruitprocessing.facts/product-types`)
+    - :received-at timestamp when the raw produce arrived
+    - :batch-temp-c actual measured post-processing storage temperature
+    - :storage-time-days cumulative days in storage since processing completed
+    - :harvest-lot-verified? true once the batch's harvest-lot/grower
+      provenance documentation cleared
     - :sanitation-score 0-100, third-party audit within 7 days
-    - :metal-detector-pass true if all product passed screening
-    - :contamination-flag-raised? true if concern surfaced during intake/processing
-    - :contamination-flag-resolved? true only if concern is verified cleared
-    - :processed? true once processing operation committed
-    - :shipment-finalized? true once shipment operation committed"
+    - :residue-screening {:passed? :test-date-valid? :lab-accredited?}
+      pesticide/herbicide/other-agrochemical MRL screening result
+    - :spoilage-flag-raised? true if a spoilage/contamination concern
+      (mold, bruising, rot, pest damage, suspected microbial contamination)
+      surfaced during intake or processing
+    - :spoilage-flag-resolved? true only if that concern is verified cleared
+    - :evidence-checklist evidence items present for the batch
+    - :processed? true once a `:log-production-batch` proposal committed
+    - :shipment-finalized? true once a `:coordinate-shipment` proposal committed"
   (:require [clojure.set]))
 
 ;; Protocol for swappable store implementations
 (defprotocol Store
   (processing-batch [store batch-id] "Retrieve a batch by ID")
-  (assay-of [store batch-id] "Retrieve assay record for batch")
+  (batch-quality-of [store batch-id] "Retrieve quality/provenance summary for a batch")
   (batch-already-processed? [store batch-id] "Verify batch has not been processed twice")
   (batch-shipment-finalized? [store batch-id] "Verify batch shipment not finalized twice"))
 
@@ -34,12 +40,13 @@
   (processing-batch [_store batch-id]
     (get @batches batch-id))
 
-  (assay-of [_store batch-id]
+  (batch-quality-of [_store batch-id]
     (let [b (get @batches batch-id)]
       (when b
-        {:batch-assay (:batch-assay b)
-         :holding-time-hours (:holding-time-hours b)
+        {:harvest-lot-verified? (:harvest-lot-verified? b)
+         :storage-time-days (:storage-time-days b)
          :sanitation-score (:sanitation-score b)
+         :residue-screening (:residue-screening b)
          :checklist (:evidence-checklist b)})))
 
   (batch-already-processed? [_store batch-id]

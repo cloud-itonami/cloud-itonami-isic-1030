@@ -1,5 +1,5 @@
 (ns fruitprocessing.phase
-  "Phase gate for the meat-processing actor rollout (0->3 maturity).
+  "Phase gate for the fruit & vegetable processing actor rollout (0->3 maturity).
   Phase 0: simulation/test only (no real batch processing)
   Phase 1: supervised operation (high-stakes ops require pre-approval)
   Phase 2: reduced supervision (escalate only on conflict/low confidence)
