@@ -28,8 +28,8 @@
   (testing "Temperature within range -> no violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-1" {:batch-temp-c 3.5
-                           :product-type "fresh-beef"}}})
+               {"batch-1" {:batch-temp-c 4.0
+                           :product-type "fresh-tomatoes"}}})
           request {:op :log-production-batch :subject "batch-1"}
           violations (#'governor/batch-temp-out-of-range-violations request st)]
       (is (empty? violations))))
@@ -38,7 +38,7 @@
     (let [st (store/mem-store
               {:initial-batches
                {"batch-2" {:batch-temp-c -2.0
-                           :product-type "fresh-beef"}}})
+                           :product-type "fresh-tomatoes"}}})
           request {:op :log-production-batch :subject "batch-2"}
           violations (#'governor/batch-temp-out-of-range-violations request st)]
       (is (seq violations))
@@ -47,76 +47,76 @@
   (testing "Temperature above range -> violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-3" {:batch-temp-c 5.5
-                           :product-type "fresh-poultry"}}})
+               {"batch-3" {:batch-temp-c 15.0
+                           :product-type "fresh-lettuce"}}})
           request {:op :log-production-batch :subject "batch-3"}
           violations (#'governor/batch-temp-out-of-range-violations request st)]
       (is (seq violations))
       (is (= :batch-temp-out-of-range (-> violations first :rule))))))
 
-(deftest holding-time-exceeded-violations
-  (testing "Holding time within limit -> no violation"
+(deftest storage-time-exceeded-violations
+  (testing "Storage time within limit -> no violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-1" {:holding-time-hours 18 :jurisdiction "US"}}})
+               {"batch-1" {:storage-time-days 3 :jurisdiction "US"}}})
           request {:op :log-production-batch :subject "batch-1"}
-          violations (#'governor/holding-time-exceeded-violations request st)]
+          violations (#'governor/storage-time-exceeded-violations request st)]
       (is (empty? violations))))
 
-  (testing "Holding time exceeds limit -> violation"
+  (testing "Storage time exceeds limit -> violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-2" {:holding-time-hours 30 :jurisdiction "US"}}})
+               {"batch-2" {:storage-time-days 12 :jurisdiction "US"}}})
           request {:op :log-production-batch :subject "batch-2"}
-          violations (#'governor/holding-time-exceeded-violations request st)]
+          violations (#'governor/storage-time-exceeded-violations request st)]
       (is (seq violations))
-      (is (= :holding-time-exceeded (-> violations first :rule))))))
+      (is (= :storage-time-exceeded (-> violations first :rule))))))
 
-(deftest contamination-flag-unresolved-violations
-  (testing "No contamination flag -> no violation"
+(deftest spoilage-flag-unresolved-violations
+  (testing "No spoilage flag -> no violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-1" {:contamination-flag-raised? false}}})
+               {"batch-1" {:spoilage-flag-raised? false}}})
           request {:op :log-production-batch :subject "batch-1"}
-          violations (#'governor/contamination-flag-unresolved-violations request st)]
+          violations (#'governor/spoilage-flag-unresolved-violations request st)]
       (is (empty? violations))))
 
-  (testing "Contamination raised but resolved -> no violation"
+  (testing "Spoilage raised but resolved -> no violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-2" {:contamination-flag-raised? true
-                           :contamination-flag-resolved? true}}})
+               {"batch-2" {:spoilage-flag-raised? true
+                           :spoilage-flag-resolved? true}}})
           request {:op :log-production-batch :subject "batch-2"}
-          violations (#'governor/contamination-flag-unresolved-violations request st)]
+          violations (#'governor/spoilage-flag-unresolved-violations request st)]
       (is (empty? violations))))
 
-  (testing "Contamination raised and NOT resolved -> violation"
+  (testing "Spoilage raised and NOT resolved -> violation"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-3" {:contamination-flag-raised? true
-                           :contamination-flag-resolved? false}}})
+               {"batch-3" {:spoilage-flag-raised? true
+                           :spoilage-flag-resolved? false}}})
           request {:op :log-production-batch :subject "batch-3"}
-          violations (#'governor/contamination-flag-unresolved-violations request st)]
+          violations (#'governor/spoilage-flag-unresolved-violations request st)]
       (is (seq violations))
-      (is (= :contamination-flag-unresolved (-> violations first :rule))))))
+      (is (= :spoilage-flag-unresolved (-> violations first :rule))))))
 
 (deftest check-ok-verdict
   (testing "All checks pass -> ok? true"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-1" {:batch-temp-c 3.5
-                           :product-type "fresh-beef"
-                           :holding-time-hours 18
+               {"batch-1" {:batch-temp-c 4.0
+                           :product-type "fresh-tomatoes"
+                           :storage-time-days 3
                            :jurisdiction "US"
                            :sanitation-score 85
-                           :metal-detector {:passed? true :threshold-mm 2.0}
-                           :contamination-flag-raised? false
-                           :evidence-checklist [:batch-assay :temperature-log
-                                               :holding-time-record :sanitation-log
-                                               :metal-detector-pass
-                                               :food-contact-surface-swab]}}})
+                           :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+                           :spoilage-flag-raised? false
+                           :evidence-checklist [:harvest-origin :temperature-log
+                                               :storage-time-record :sanitation-log
+                                               :residue-screening-pass
+                                               :traceability-record]}}})
           request {:op :log-production-batch :subject "batch-1" :stake :log-production-batch}
-          proposal {:value {:jurisdiction "US"} :cites ["FSIS"] :confidence 0.85}
+          proposal {:value {:jurisdiction "US"} :cites ["USDA"] :confidence 0.85}
           context {:actor-id "test"}
           verdict (governor/check request context proposal st)]
       (is (true? (:ok? verdict)))
@@ -126,9 +126,9 @@
   (testing "Hard violations -> ok? false, hard? true"
     (let [st (store/mem-store
               {:initial-batches
-               {"batch-1" {:contamination-flag-raised? true
-                           :contamination-flag-resolved? false
-                           :product-type "fresh-beef"}}})
+               {"batch-1" {:spoilage-flag-raised? true
+                           :spoilage-flag-resolved? false
+                           :product-type "fresh-apples"}}})
           request {:op :log-production-batch :subject "batch-1" :stake :log-production-batch}
           proposal {:value {} :cites [] :confidence 0.85}
           context {:actor-id "test"}

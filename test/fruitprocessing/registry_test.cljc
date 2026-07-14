@@ -18,15 +18,15 @@
   (testing "Temperature above upper bound"
     (is (true? (registry/batch-temp-out-of-range? 5.0 -1.0 4.0)))))
 
-(deftest holding-time-exceeded-test
-  (testing "Holding time within limit"
-    (is (false? (registry/holding-time-exceeded? 18 24))))
+(deftest storage-time-exceeded-test
+  (testing "Storage time within limit"
+    (is (false? (registry/storage-time-exceeded? 3 7))))
 
-  (testing "Holding time at limit"
-    (is (false? (registry/holding-time-exceeded? 24 24))))
+  (testing "Storage time at limit"
+    (is (false? (registry/storage-time-exceeded? 7 7))))
 
-  (testing "Holding time exceeds limit"
-    (is (true? (registry/holding-time-exceeded? 25 24)))))
+  (testing "Storage time exceeds limit"
+    (is (true? (registry/storage-time-exceeded? 8 7)))))
 
 (deftest sanitation-score-insufficient-test
   (testing "Score meets minimum"
@@ -38,22 +38,25 @@
   (testing "Score below minimum"
     (is (true? (registry/sanitation-score-insufficient? 79 80)))))
 
-(deftest metal-detector-pass-test
-  (testing "Passed with good threshold"
-    (is (true? (registry/metal-detector-pass? {:passed? true :threshold-mm 2.0}))))
+(deftest residue-screening-pass-test
+  (testing "Passed with valid test date and accredited lab"
+    (is (true? (registry/residue-screening-pass? {:passed? true :test-date-valid? true :lab-accredited? true}))))
 
   (testing "Failed screening"
-    (is (false? (registry/metal-detector-pass? {:passed? false :threshold-mm 2.0}))))
+    (is (false? (registry/residue-screening-pass? {:passed? false :test-date-valid? true :lab-accredited? true}))))
 
-  (testing "Threshold too high"
-    (is (false? (registry/metal-detector-pass? {:passed? true :threshold-mm 3.0})))))
+  (testing "Test date invalid"
+    (is (false? (registry/residue-screening-pass? {:passed? true :test-date-valid? false :lab-accredited? true}))))
 
-(deftest holding-time-excessive-test
+  (testing "Lab not accredited"
+    (is (false? (registry/residue-screening-pass? {:passed? true :test-date-valid? true :lab-accredited? false})))))
+
+(deftest spoilage-time-excessive-test
   (testing "Flag hold within safe window"
-    (is (false? (registry/holding-time-excessive? 1.5))))
+    (is (false? (registry/spoilage-time-excessive? 12.0))))
 
   (testing "Flag hold at boundary"
-    (is (false? (registry/holding-time-excessive? 2.0))))
+    (is (false? (registry/spoilage-time-excessive? 24.0))))
 
   (testing "Flag hold exceeds safe window"
-    (is (true? (registry/holding-time-excessive? 2.5)))))
+    (is (true? (registry/spoilage-time-excessive? 25.0)))))
