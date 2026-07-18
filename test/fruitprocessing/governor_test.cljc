@@ -284,3 +284,39 @@
           violations (#'governor/already-shipment-finalized-violations request st)]
       (is (seq violations))
       (is (= :already-shipment-finalized (-> violations first :rule))))))
+
+;; ─────── Downstream Cross-Actor Handoff (optional, isic-1030 -> isic-1075) ───────
+
+(def ^:private well-formed-handoff
+  {:handoff/id "h-1"
+   :handoff/source-actor "cloud-itonami-isic-1030"
+   :handoff/batch-id "batch-1"
+   :handoff/product-type-id "frozen-peas"
+   :handoff/quantity-kg 500.0
+   :handoff/dispatched-at-iso "2026-07-17T00:00:00Z"})
+
+(deftest handoff-malformed-violations-test
+  (testing "no :handoff at all -> no violation (attachment is optional)"
+    (let [request {:op :coordinate-shipment}
+          proposal {:value {}}
+          violations (#'governor/handoff-malformed-violations request proposal)]
+      (is (empty? violations))))
+
+  (testing "well-formed :handoff -> no violation"
+    (let [request {:op :coordinate-shipment}
+          proposal {:value {:handoff well-formed-handoff}}
+          violations (#'governor/handoff-malformed-violations request proposal)]
+      (is (empty? violations))))
+
+  (testing "malformed :handoff (missing quantity-kg) -> hard violation"
+    (let [request {:op :coordinate-shipment}
+          proposal {:value {:handoff (dissoc well-formed-handoff :handoff/quantity-kg)}}
+          violations (#'governor/handoff-malformed-violations request proposal)]
+      (is (seq violations))
+      (is (= :handoff-malformed (-> violations first :rule)))))
+
+  (testing "only applies to :coordinate-shipment"
+    (let [request {:op :log-production-batch}
+          proposal {:value {:handoff (dissoc well-formed-handoff :handoff/quantity-kg)}}
+          violations (#'governor/handoff-malformed-violations request proposal)]
+      (is (empty? violations)))))
