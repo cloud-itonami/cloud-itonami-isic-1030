@@ -1,4 +1,4 @@
-{:itonami.blueprint/id "cloud-itonami-1030"
+{:itonami.blueprint/id "cloud-itonami-isic-1030"
  :itonami.blueprint/name "Community Fruit & Vegetable Processing"
  :itonami.blueprint/isic-rev5 "1030"
  :itonami.blueprint/domain :food/fruit-vegetable-processing
@@ -9,4 +9,4 @@
  :itonami.blueprint/required-technologies [:robotics :identity :forms :dmn :bpmn :audit-ledger :cae]
  :itonami.blueprint/optional-technologies [:optimization :telemetry :traceability]
  :itonami.blueprint/status :public-oss
- :itonami.blueprint/maturity :implemented}
+ :itonami.blueprint/maturity :blueprint}
