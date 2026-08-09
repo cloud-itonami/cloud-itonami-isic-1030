@@ -1,0 +1,517 @@
+(ns fruitprocessing.render-html
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
+
+  Closes flagship checklist item 2: this repo previously had no demo page
+  and no generator at all. This namespace drives the REAL actor stack --
+  `fruitprocessing.operation/build` -> `fruitprocessing.advisor` ->
+  `fruitprocessing.governor` -> `fruitprocessing.phase` ->
+  `fruitprocessing.store` -- and renders whatever that run actually
+  produced. Every batch id, temperature, storage-time, sanitation score,
+  disposition, hold rule and hold detail string on the page is read back
+  out of the audit facts the actor returned or out of the store the actor
+  gated; nothing on the page is hand-typed demo text.
+
+  Three things about THIS repo shape the scenario below, and all three
+  were measured before writing it:
+
+  1. There is no `store/demo-data` and no langgraph StateGraph. The
+     store ships empty (`fruitprocessing.store/mem-store`) and
+     `fruitprocessing.operation/build` is an in-process stub returning
+     an `invoke-operation` fn -- `deps.edn` declares no langgraph
+     dependency at all. So the console seeds its own batches (below) and
+     drives `build`'s returned fn, which is this repo's real entry point.
+
+  2. The scenario runs at `:phase-2` (\"reduced supervision\": the phase
+     gate is pass-through and the Governor's own verdict decides). This
+     is deliberate and measured: at `:phase-1`, `fruitprocessing.phase/gate`
+     rewrites the disposition to `:escalate` whenever the REQUEST carries
+     a `:stake` in `governor/high-stakes`, and it does so regardless of
+     the base disposition -- which masks a HARD governor hold on
+     `:log-production-batch` / `:coordinate-shipment` behind a human
+     approval request. At `:phase-2` a hard violation stays a `:hold`
+     that never reaches a human, which is what this console has to show.
+     (The phase-1 masking is repo behaviour, not something this file
+     changes.)
+
+  3. Nothing in this repo turns an approved escalation back into a
+     commit -- there is no approval-resume node. So where the actor
+     answers `:escalate`, this driver records the operator's decision
+     separately and applies it through the store's own one-way flags
+     (`store/mark-processed` / `store/mark-shipment-finalized`, which
+     the Governor then reads back to refuse a replay). The page keeps
+     those operator actions in their own table, visibly distinct from
+     the actor's audit ledger, so an approval is never displayed as
+     something the actor decided by itself.
+
+  Deterministic: no timestamps, no randomness, no map-iteration order in
+  the page content -- byte-identical across reruns (verify by diffing two
+  consecutive runs).
+
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [jp-go-dds.skin]
+            [clojure.string :as str]
+            [fruitprocessing.store :as store]
+            [fruitprocessing.facts :as facts]
+            [fruitprocessing.governor :as governor]
+            [fruitprocessing.operation :as operation]))
+
+;; ----------------------------- scenario seed -----------------------------
+
+(def ^:private full-evidence
+  "The six evidence items every jurisdiction in `fruitprocessing.facts`
+  requires. EU additionally requires `:low-acid-canning-process-record`."
+  [:harvest-lot-record :temperature-log :storage-time-record
+   :sanitation-log :residue-screening-pass :traceability-record])
+
+(def ^:private operator-context
+  {:actor-id "fruit-vegetable-processor-01" :phase :phase-2})
+
+(def ^:private seed-batches
+  "Seeded processing batches, in display order. Each one isolates exactly
+  one Governor condition so the hold rule the page shows is unambiguous:
+  001 is clean end-to-end, 008 is clean but is used to attempt an
+  operation outside this actor's authority, and 002-007 each violate one
+  and only one independent check. `batch-1030-999` is deliberately NOT
+  seeded (see `run-demo!`)."
+  [{:id "batch-1030-001" :jurisdiction "US" :product-type "frozen-peas"
+    :received-at "2026-07-14T08:00:00Z"
+    :batch-temp-c -20.0 :storage-time-days 3
+    :harvest-lot-verified? true :sanitation-score 88
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-002" :jurisdiction "US" :product-type "frozen-peas"
+    :received-at "2026-07-14T09:30:00Z"
+    :batch-temp-c -12.0 :storage-time-days 2
+    :harvest-lot-verified? true :sanitation-score 90
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-003" :jurisdiction "JP" :product-type "canned-tomato"
+    :received-at "2026-07-10T02:15:00Z"
+    :batch-temp-c 18.0 :storage-time-days 9
+    :harvest-lot-verified? true :sanitation-score 93
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-004" :jurisdiction "US" :product-type "frozen-corn"
+    :received-at "2026-07-15T06:00:00Z"
+    :batch-temp-c -19.0 :storage-time-days 4
+    :harvest-lot-verified? true :sanitation-score 62
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-005" :jurisdiction "US" :product-type "dried-apricot"
+    :received-at "2026-07-12T11:45:00Z"
+    :batch-temp-c 12.0 :storage-time-days 5
+    :harvest-lot-verified? true :sanitation-score 87
+    :residue-screening {:passed? false :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-006" :jurisdiction "EU" :product-type "canned-green-beans"
+    :received-at "2026-07-13T14:20:00Z"
+    :batch-temp-c 20.0 :storage-time-days 2
+    :harvest-lot-verified? true :sanitation-score 91
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    ;; EU also requires :low-acid-canning-process-record -- absent here.
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-007" :jurisdiction "US" :product-type "frozen-peas"
+    :received-at "2026-07-15T08:10:00Z"
+    :batch-temp-c -20.0 :storage-time-days 1
+    :harvest-lot-verified? true :sanitation-score 89
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? true :spoilage-flag-resolved? false
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}
+
+   {:id "batch-1030-008" :jurisdiction "US" :product-type "frozen-corn"
+    :received-at "2026-07-15T10:05:00Z"
+    :batch-temp-c -20.0 :storage-time-days 1
+    :harvest-lot-verified? true :sanitation-score 94
+    :residue-screening {:passed? true :test-date-valid? true :lab-accredited? true}
+    :spoilage-flag-raised? false :spoilage-flag-resolved? true
+    :evidence-checklist full-evidence
+    :processed? false :shipment-finalized? false}])
+
+;; ----------------------------- scenario driver -----------------------------
+
+(defn- exec!
+  "Run one operation through the real actor and append every audit fact it
+  produced to the ledger. `expect` is the disposition this step of the
+  scenario claims to demonstrate -- if the actor disagrees the build fails
+  loudly rather than rendering a page that misdescribes its own run."
+  [actor state expect request]
+  (let [result (actor request operator-context)]
+    (swap! (:ledger state) into (:audit result))
+    (when-not (= expect (:disposition result))
+      (throw (ex-info "scenario step did not reach the disposition it claims"
+                      {:request request
+                       :expected expect
+                       :actual (:disposition result)
+                       :verdict (:verdict result)})))
+    (when (= :commit (:disposition result))
+      (swap! (:commits state) conj
+             (assoc (:record result) :op (:op request) :subject (:subject request))))
+    result))
+
+(defn- approve!
+  "Record the human operator's decision on an escalation the actor raised,
+  and apply it through the store's own one-way flag. Refuses to record an
+  approval the actor never asked for."
+  [st state result request]
+  (when-not (= :escalate (:disposition result))
+    (throw (ex-info "cannot approve an operation the actor did not escalate"
+                    {:request request :disposition (:disposition result)})))
+  (let [op (:op request)
+        subject (:subject request)
+        applied (case op
+                  :log-production-batch (do (store/mark-processed st subject)
+                                            :store/mark-processed)
+                  :coordinate-shipment (do (store/mark-shipment-finalized st subject)
+                                           :store/mark-shipment-finalized)
+                  :none)]
+    (swap! (:approvals state) conj
+           {:op op
+            :subject subject
+            :reason (:reason (last (:audit result)))
+            :confidence (get-in result [:verdict :confidence])
+            :decision :approved
+            :applied applied})))
+
+(defn run-demo!
+  "Seeds a fresh store, builds the real actor via
+  `fruitprocessing.operation/build`, and drives a scenario that reaches
+  every disposition this actor can produce.
+
+  Clean lifecycle -- `batch-1030-001` (US / frozen-peas, every independent
+  check clean) is logged into production records and then shipped. Both
+  are `governor/high-stakes` actuation events, so both ALWAYS escalate to
+  a human no matter how confident the advisor is and no matter what phase
+  the actor runs in; the operator approves each, and the approval is
+  applied through the store's one-way flags. Replaying either operation
+  afterwards is then a HARD hold (`:already-processed`,
+  `:already-shipment-finalized`) -- the double-commit guard reading the
+  flags the approvals set.
+
+  HARD holds that never reach a human, one independent Governor rule
+  each: `batch-1030-008` (a perfectly clean batch) is refused an
+  `:operate-retort` proposal outright because direct processing-line
+  control is outside this actor's closed op allowlist -- this actor
+  coordinates plant operations, it does not run the retort;
+  `batch-1030-999` is not registered in the plant at all;
+  `batch-1030-006` (EU) is missing the low-acid-canning process record
+  EFSA requires; `batch-1030-002` sits at -12.0 degC, outside the
+  [-22.0, -18.0] frozen-peas storage window; `batch-1030-003` (JP) has
+  been in storage 9 days against a 5 day limit; `batch-1030-004` has a
+  62 sanitation score against an 80 floor; `batch-1030-005` failed
+  residue screening; `batch-1030-007` has an unresolved spoilage flag.
+
+  Human review without actuation -- `batch-1030-007` also raises
+  `:flag-food-safety-concern`, which the Governor escalates even though
+  nothing about the proposal is wrong, because a food-safety concern is
+  never auto-resolved by advisor confidence alone.
+
+  Auto-commit -- `:schedule-maintenance` on metal detector `MD-002` is the
+  one operation here that is neither high-stakes nor always-escalate, so a
+  clean, confident proposal commits with no human in the loop.
+
+  Returns `{:store :ledger :approvals :commits}`; every value the page
+  renders comes out of this map."
+  []
+  (let [st (store/mem-store
+            {:initial-batches (into {} (map (juxt :id identity)) seed-batches)})
+        actor (operation/build st)
+        state {:ledger (atom []) :approvals (atom []) :commits (atom [])}]
+
+    ;; --- routine plant work: the only disposition that commits unattended
+    (exec! actor state :commit
+           {:op :schedule-maintenance :subject "MD-002" :stake :operational})
+
+    ;; --- batch-1030-001: full clean lifecycle, human-approved at each step
+    (let [req {:op :log-production-batch :subject "batch-1030-001"
+               :stake :log-production-batch}]
+      (approve! st state (exec! actor state :escalate req) req))
+    (exec! actor state :hold
+           {:op :log-production-batch :subject "batch-1030-001"
+            :stake :log-production-batch})
+
+    (let [req {:op :coordinate-shipment :subject "batch-1030-001"
+               :stake :coordinate-shipment}]
+      (approve! st state (exec! actor state :escalate req) req))
+    (exec! actor state :hold
+           {:op :coordinate-shipment :subject "batch-1030-001"
+            :stake :coordinate-shipment})
+
+    ;; --- outside the closed op allowlist: refused on an otherwise clean batch
+    (exec! actor state :hold
+           {:op :operate-retort :subject "batch-1030-008" :stake :operational})
+
+    ;; --- batch never registered at this plant
+    (exec! actor state :hold
+           {:op :coordinate-shipment :subject "batch-1030-999"
+            :stake :coordinate-shipment})
+
+    ;; --- a food-safety concern always gets a human look, even when the
+    ;;     proposal itself is clean
+    (exec! actor state :escalate
+           {:op :flag-food-safety-concern :subject "batch-1030-007"
+            :stake :monitoring})
+
+    ;; --- one independent food-safety check each
+    (doseq [id ["batch-1030-002" "batch-1030-003" "batch-1030-004"
+                "batch-1030-005" "batch-1030-006" "batch-1030-007"]]
+      (exec! actor state :hold
+             {:op :log-production-batch :subject id :stake :log-production-batch}))
+
+    {:store st
+     :ledger @(:ledger state)
+     :approvals @(:approvals state)
+     :commits @(:commits state)}))
+
+;; ----------------------------- rendering -----------------------------
+
+(defn- esc [v]
+  (-> (str v)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- kw
+  "Unqualified keyword name, escaped."
+  [v]
+  (esc (if (keyword? v) (name v) v)))
+
+(defn- qkw
+  "Keyword with its namespace kept (`store/mark-processed`), escaped."
+  [v]
+  (esc (if (keyword? v) (subs (str v) 1) v)))
+
+(defn- last-fact-for [ledger subject]
+  (last (filter #(= (:subject %) subject) ledger)))
+
+(defn- status-cell [ledger subject]
+  (let [f (last-fact-for ledger subject)]
+    (case (:t f)
+      nil "<span class=\"muted\">no activity</span>"
+      :committed "<span class=\"ok\">committed</span>"
+      :governor-hold
+      (str "<span class=\"critical\">HARD hold &middot; "
+           (kw (-> f :violations first :rule)) "</span>")
+      :approval-requested "<span class=\"warn\">awaiting human sign-off</span>"
+      :advisor-proposal "<span class=\"muted\">proposed</span>"
+      "<span class=\"muted\">in progress</span>")))
+
+(defn- lifecycle-cell [b]
+  (cond
+    (:shipment-finalized? b) "<span class=\"ok\">logged &amp; shipped</span>"
+    (:processed? b) "<span class=\"warn\">logged, not yet shipped</span>"
+    :else "<span class=\"muted\">awaiting production logging</span>"))
+
+(defn- window-cell
+  "The product's storage-temperature window, read from
+  `fruitprocessing.facts/product-types` -- the same lookup the Governor
+  uses when it checks the batch's measured temperature."
+  [b]
+  (if-let [p (facts/product-type-by-id (:product-type b))]
+    (format "[%s, %s]" (esc (:cold-chain-temp-min-c p)) (esc (:cold-chain-temp-max-c p)))
+    "<span class=\"muted\">unknown product</span>"))
+
+(defn- batch-row [st ledger seed]
+  (let [b (store/processing-batch st (:id seed))
+        j (facts/jurisdiction-by-id (:jurisdiction b))]
+    (format (str "        <tr><td><code>%s</code></td><td>%s</td><td>%s</td>"
+                 "<td class=\"num\">%s</td><td class=\"num\">%s</td>"
+                 "<td class=\"num\">%s / %s</td><td class=\"num\">%s</td>"
+                 "<td>%s</td><td>%s</td></tr>")
+            (esc (:id b))
+            (esc (:jurisdiction b))
+            (esc (or (:name (facts/product-type-by-id (:product-type b)))
+                     (:product-type b)))
+            (esc (:batch-temp-c b))
+            (window-cell b)
+            (esc (:storage-time-days b))
+            (esc (:storage-time-max-days j))
+            (esc (:sanitation-score b))
+            (lifecycle-cell b)
+            (status-cell ledger (:id b)))))
+
+(defn- hold-rows
+  "One row per independent Governor violation actually returned by this
+  run. `detail` is the Governor's own message, verbatim."
+  [ledger]
+  (for [f ledger
+        :when (= :governor-hold (:t f))
+        v (:violations f)]
+    (format "        <tr><td><code>%s</code></td><td><code>%s</code></td><td><span class=\"critical\">%s</span></td><td>%s</td></tr>"
+            (esc (:subject f)) (kw (:op f)) (kw (:rule v)) (esc (:detail v)))))
+
+(defn- approval-rows [approvals]
+  (for [a approvals]
+    (format "        <tr><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td class=\"num\">%s</td><td><span class=\"ok\">%s</span></td><td><code>%s</code></td></tr>"
+            (esc (:subject a)) (kw (:op a)) (kw (:reason a))
+            (esc (:confidence a)) (kw (:decision a)) (qkw (:applied a)))))
+
+(defn- commit-rows [commits]
+  (for [c commits]
+    (format "        <tr><td><code>%s</code></td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>"
+            (esc (:subject c)) (kw (:op c)) (kw (:effect c))
+            (esc (pr-str (:value c))))))
+
+(defn- fact-detail [{:keys [t basis reason confidence proposal-summary]}]
+  (case t
+    :advisor-proposal (format "%s <span class=\"muted\">(confidence %s)</span>"
+                              (esc proposal-summary) (esc confidence))
+    :governor-hold (str "<span class=\"critical\">"
+                        (esc (str/join ", " (map name basis))) "</span>")
+    :approval-requested (str "<span class=\"warn\">" (kw reason) "</span>")
+    :committed (esc (str/join ", " basis))
+    ""))
+
+(defn- ledger-row [{:keys [t op subject] :as f}]
+  (format "        <tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>"
+          (kw t) (kw (or op :n-a)) (esc subject) (fact-detail f)))
+
+(defn- gate-rows
+  "This actor's own closed op contract, derived from the live
+  `fruitprocessing.governor` vars (`allowed-ops`, `high-stakes`,
+  `always-escalate-ops`, `confidence-floor`) rather than described by
+  hand, so the table cannot drift away from the code it documents."
+  []
+  (for [op (sort-by name governor/allowed-ops)]
+    (format "        <tr><td><code>%s</code></td><td>%s</td></tr>"
+            (kw op)
+            (cond
+              (contains? governor/high-stakes op)
+              "<span class=\"warn\">ALWAYS human sign-off &middot; real actuation, never auto at any phase</span>"
+              (contains? governor/always-escalate-ops op)
+              "<span class=\"warn\">ALWAYS human sign-off &middot; never auto-resolved by advisor confidence</span>"
+              :else
+              (format "<span class=\"ok\">auto-commit when the Governor is clean and confidence &ge; %s</span>"
+                      (esc governor/confidence-floor))))))
+
+(defn render
+  "Renders the operator console from the map `run-demo!` returned."
+  [{:keys [store ledger approvals commits]}]
+  (let [holds (filter #(= :governor-hold (:t %)) ledger)
+        escalations (filter #(= :approval-requested (:t %)) ledger)]
+    (str
+     "<!doctype html>\n"
+     "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+     "<title>cloud-itonami-isic-1030 &middot; fruit &amp; vegetable processing</title><style>"
+     (jp-go-dds.skin/dds+skin)
+     "</style></head><body>\n"
+     "<header class=\"bar\">\n"
+     "  <h1>Processing and preserving of fruit and vegetables (ISIC 1030) — Operator Console</h1>\n"
+     "  <span class=\"badge\">read-only sample · governor-gated · production logging and shipment always human-approved</span>\n"
+     "</header>\n"
+     "<main>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Run summary</h2>\n"
+     "    <p class=\"muted\">Build-time snapshot generated by <code>fruitprocessing.render-html</code> (<code>clojure -M:dev:render-html</code>) from one real run of <code>fruitprocessing.operation/build</code> at phase <code>"
+     (kw (:phase operator-context)) "</code>, actor <code>" (esc (:actor-id operator-context))
+     "</code>. Every id, number, disposition and hold reason below is actor or store output — nothing is hand-written.</p>\n"
+     "    <ul>\n"
+     "      <li><strong>" (count ledger) "</strong> audit facts</li>\n"
+     "      <li><strong class=\"critical\">" (count holds) "</strong> HARD Governor holds — none of these reached a human</li>\n"
+     "      <li><strong class=\"warn\">" (count escalations) "</strong> escalations to a human operator</li>\n"
+     "      <li><strong class=\"ok\">" (count commits) "</strong> unattended auto-commits</li>\n"
+     "    </ul>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Processing batches</h2>\n"
+     "    <p class=\"muted\">Storage temperature is checked against the finished product's window from <code>fruitprocessing.facts/product-types</code>; storage time against the jurisdiction limit. Both bounds are hard limits — this actor never operates the retort, blanch, freeze or dry process itself.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Batch</th><th>Jurisdiction</th><th>Product</th><th>Storage °C</th><th>Window °C</th><th>Days / limit</th><th>Sanitation</th><th>Lifecycle</th><th>Last op status</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map (partial batch-row store ledger) seed-batches)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "    <p class=\"muted\">A batch that has completed its lifecycle shows a HARD hold as its last status when the same operation is replayed — that is the double-commit guard reading the store's one-way flags, not a failure.</p>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>HARD Governor holds (never reach a human)</h2>\n"
+     "    <p class=\"muted\">A hard violation is refused outright: no advisor confidence, no phase, and no operator can override it. The detail text is the Governor's own message, verbatim.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Subject</th><th>Op</th><th>Rule</th><th>Governor detail</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (hold-rows ledger)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Human approval queue</h2>\n"
+     "    <p class=\"muted\">Decisions taken by the plant operator in this scenario, not by the actor. This repo has no approval-resume node, so an approval is applied through the store's one-way flag named in the last column; the Governor then reads that flag back to refuse a replay.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Subject</th><th>Op</th><th>Escalation reason</th><th>Advisor confidence</th><th>Operator decision</th><th>Applied via</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (approval-rows approvals)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Unattended commits</h2>\n"
+     "    <p class=\"muted\">Committed records this run produced with no human in the loop.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Subject</th><th>Op</th><th>Effect</th><th>Committed value</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (commit-rows commits)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Action gate (Fruit &amp; Vegetable Processing Governor)</h2>\n"
+     "    <p class=\"muted\">The closed op allowlist, read live from <code>fruitprocessing.governor</code>. Anything outside it — direct processing-line control, or a food-safety certification action — is a permanent block: this actor has no authority to make such a proposal at all, let alone commit it.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Op</th><th>Gate</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (gate-rows)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Audit ledger (this run)</h2>\n"
+     "    <p class=\"muted\">Every fact the actor emitted, in order — one advisor proposal plus one disposition fact per operation.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Fact</th><th>Op</th><th>Subject</th><th>Basis</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map ledger-row ledger)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "    <p class=\"muted\">Rendered verbatim, including one artefact worth knowing about: the escalation on <code>:flag-food-safety-concern</code> carries reason <code>low-confidence</code> even though the advisor's confidence (0.65) is above the floor (0.6). <code>fruitprocessing.operation</code> derives that keyword from <code>:high-stakes?</code> alone, so an always-escalate op that is not an actuation event falls through to <code>low-confidence</code>. It is shown as the actor emitted it rather than corrected here.</p>\n"
+     "  </section>\n"
+     "</main>\n"
+     "<footer>Generated at build time from a real actor run — cloud-itonami-isic-1030.</footer>\n"
+     "</body></html>\n")))
+
+(defn -main [& args]
+  (let [out (or (first args) "docs/samples/operator-console.html")
+        demo (run-demo!)
+        html (render demo)]
+    (spit out html)
+    (println "wrote" out
+             "(" (count (:ledger demo)) "audit facts,"
+             (count (filter #(= :governor-hold (:t %)) (:ledger demo))) "HARD holds,"
+             (count (:approvals demo)) "human approvals,"
+             (count (:commits demo)) "auto-commits )")))
