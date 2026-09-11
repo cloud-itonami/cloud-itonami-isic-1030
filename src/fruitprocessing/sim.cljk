@@ -2,7 +2,7 @@
   "Simple simulation/demo driver for the fruit & vegetable processing actor.
   Exercises the basic flow: intake -> log batch -> coordinate shipment.
 
-  For CLI: clojure -M:dev:run"
+  For CLI: kbb -M:dev:run"
   (:require [fruitprocessing.store :as store]
             [fruitprocessing.operation :as operation]))
 
