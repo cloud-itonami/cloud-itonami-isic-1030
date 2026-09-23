@@ -1,5 +1,5 @@
 (ns fruitprocessing.registry-test
-  (:require [clojure.test :refer [deftest is are testing]]
+  (:require [kotoba.test :refer [deftest is are testing]]
             [fruitprocessing.registry :as registry]))
 
 (deftest batch-temp-out-of-range-test
