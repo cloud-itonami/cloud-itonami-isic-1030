@@ -7,7 +7,7 @@
   independently validate proposals against jurisdiction/product
   requirements; the advisor's confidence is NOT sufficient to override
   these checks."
-  (:require [clojure.set :as set]))
+  (:require [kotoba.lang.coll :as set]))
 
 (def jurisdictions
   "Fruit & vegetable processing jurisdictions and their maximum
