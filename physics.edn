@@ -1,0 +1,31 @@
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isic-1030"
+ :cases
+ [{:id :vegetable-blanch
+   :kind :thermal
+   :procedure "vegetable cubes pass through a 95 C water blancher for 3 min; the cube centre must reach enzyme-inactivation temperature"
+   :params {:conductivity-w-mk 0.55 :density-kg-m3 1040.0 :specific-heat-j-kgk 3800.0
+            :t0-c 15.0 :t-hot-c 95.0 :h-front-w-m2k 500.0 :h-back-w-m2k 0.0 :t-back-ambient-c 15.0
+            :threshold-c 85.0 :duration-s 180.0 :nodes 21}
+   :sweep {:param :thickness-m :values [0.004 0.006 0.008 0.010 0.012]}
+   :quantity :final-back-c
+   :limit {:min 85.0 :basis "estimate: blanching aims at a centre of ~85 C or more to inactivate peroxidase; replace with the product's validated blanch schedule"}
+   :boundary {:lo 0.002 :hi 0.03}}
+  {:id :puree-transfer
+   :kind :pipe-flow
+   :procedure "pump moves fruit puree from the finisher to the aseptic filler through a 50 mm sanitary line"
+   :params {:diameter-m 0.05 :length-m 40.0 :roughness-m 1.5e-6
+            :density-kg-m3 1050.0 :viscosity-pa-s 0.05 :pump-efficiency 0.5 :elevation-m 3.0}
+   :sweep {:param :q-m3s :values [0.001 0.002 0.003 0.004 0.005]}
+   :quantity :pressure-drop-pa
+   :limit {:max 3.0e5 :basis "estimate: ~3 bar discharge of a sanitary lobe pump (Newtonian approximation of the puree)"}
+   :boundary {:lo 2.0e-4 :hi 0.02}}
+  {:id :produce-crate-lift
+   :kind :manipulator
+   :procedure "arm lifts a field crate of produce from the receiving dock onto the washer infeed"
+   :params {:l1-m 0.70 :l2-m 0.60 :m1-kg 12.0 :m2-kg 8.0
+            :from [0.70 0.0] :to [0.20 0.90] :duration-s 2.5 :steps 500}
+   :sweep {:param :payload-kg :values [5.0 10.0 15.0 20.0 25.0]}
+   :quantity :peak-tau1-nm
+   :limit {:max 300.0 :basis "estimate: continuous shoulder torque of a washdown-rated ~25 kg payload arm"}
+   :boundary {:lo 1.0 :hi 80.0}}]}
