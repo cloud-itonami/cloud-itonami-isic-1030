@@ -25,7 +25,7 @@
     - :evidence-checklist evidence items present for the batch
     - :processed? true once a `:log-production-batch` proposal committed
     - :shipment-finalized? true once a `:coordinate-shipment` proposal committed"
-  (:require [clojure.set]))
+  (:require [kotoba.lang.coll]))
 
 ;; Protocol for swappable store implementations
 (defprotocol Store
